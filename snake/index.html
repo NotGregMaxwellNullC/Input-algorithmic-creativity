@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Snake</title>
+  <style>
+    body { background: #111; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; font-family: monospace; color: #fff; }
+    canvas { border: 2px solid #444; }
+    #score { font-size: 20px; margin-bottom: 10px; }
+    #msg { font-size: 16px; margin-top: 10px; color: #aaa; }
+  </style>
+</head>
+<body>
+  <div id="score">Score: 0</div>
+  <canvas id="c" width="400" height="400"></canvas>
+  <div id="msg">Arrow keys to move. Press any arrow to start.</div>
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    const SIZE = 20;
+    const COLS = canvas.width / SIZE;
+    const ROWS = canvas.height / SIZE;
+
+    let snake, dir, food, score, loop, started;
+
+    function init() {
+      snake = [{x: 10, y: 10}];
+      dir = {x: 0, y: 0};
+      score = 0;
+      started = false;
+      document.getElementById('score').textContent = 'Score: 0';
+      document.getElementById('msg').textContent = 'Arrow keys to move. Press any arrow to start.';
+      placeFood();
+      draw();
+    }
+
+    function placeFood() {
+      do {
+        food = {x: Math.floor(Math.random() * COLS), y: Math.floor(Math.random() * ROWS)};
+      } while (snake.some(s => s.x === food.x && s.y === food.y));
+    }
+
+    function step() {
+      const head = {x: snake[0].x + dir.x, y: snake[0].y + dir.y};
+
+      if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS || snake.some(s => s.x === head.x && s.y === head.y)) {
+        clearInterval(loop);
+        document.getElementById('msg').textContent = 'Game over! Press any arrow to restart.';
+        started = false;
+        return;
+      }
+
+      snake.unshift(head);
+      if (head.x === food.x && head.y === food.y) {
+        score++;
+        document.getElementById('score').textContent = 'Score: ' + score;
+        placeFood();
+      } else {
+        snake.pop();
+      }
+      draw();
+    }
+
+    function draw() {
+      ctx.fillStyle = '#111';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = '#4f4';
+      snake.forEach((s, i) => {
+        ctx.fillStyle = i === 0 ? '#8f8' : '#4f4';
+        ctx.fillRect(s.x * SIZE + 1, s.y * SIZE + 1, SIZE - 2, SIZE - 2);
+      });
+
+      ctx.fillStyle = '#f44';
+      ctx.fillRect(food.x * SIZE + 1, food.y * SIZE + 1, SIZE - 2, SIZE - 2);
+    }
+
+    document.addEventListener('keydown', e => {
+      const moves = {
+        ArrowUp:    {x: 0,  y: -1},
+        ArrowDown:  {x: 0,  y:  1},
+        ArrowLeft:  {x: -1, y:  0},
+        ArrowRight: {x: 1,  y:  0},
+      };
+      const next = moves[e.key];
+      if (!next) return;
+      e.preventDefault();
+
+      if (!started) {
+        if (snake.length > 1) init(); // restart after game over
+        dir = next;
+        started = true;
+        document.getElementById('msg').textContent = '';
+        loop = setInterval(step, 120);
+      } else {
+        // prevent reversing
+        if (next.x !== -dir.x || next.y !== -dir.y) dir = next;
+      }
+    });
+
+    init();
+  </script>
+</body>
+</html>
