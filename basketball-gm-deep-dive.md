@@ -89,7 +89,7 @@ turnovers: {
 |-----------------|-----------------|---------------|
 | `shootingAtRim` | hgt, stre, dnk, oiq | Dunks & layups |
 | `shootingLowPost` | hgt, stre, spd, ins, oiq | Post game |
-| `shootingMidRange` | oiq, fg, stre | Jumpers |
+| `shootingMidRange` | oiq, fg, stre | Jumpers (**oiq has a negative weight here — see below**) |
 | `shootingThreePointer` | oiq, tp | 3-pointers |
 | `shootingFT` | ft | Free throws |
 | `rebounding` | hgt, stre, jmp, reb, oiq, diq | Boards |
@@ -104,6 +104,17 @@ turnovers: {
 | `endurance` | 50, endu | Fatigue resistance |
 | `athleticism` | stre, spd, jmp, hgt | Overall athleticism |
 | `jumpBall` | hgt, jmp | Tip-off |
+
+### The Mid-Range Paradox
+
+```typescript
+shootingMidRange: {
+    ratings: ["oiq", "fg", "stre"],
+    weights: [-0.5, 1, 0.2],
+},
+```
+
+**Plain English:** Higher Offensive IQ actually *reduces* a player's mid-range composite rating. This is intentional — smarter players recognize that mid-range shots are inefficient and take fewer of them. So a high-IQ player is *less likely to be coded as a mid-range shooter*, even if their `fg` rating is decent. This mirrors the modern NBA analytics consensus baked right into the simulation.
 
 ---
 
@@ -206,6 +217,15 @@ const shooter = this.pickPlayer("usage", this.o, 1.25);
 
 Players with higher `usage` composite ratings get the ball more often. Stars take more shots.
 
+The `usage` composite is raised to the **1.9 power** before the weighted draw:
+```typescript
+// usage composite weights:
+// ins×1.5 + dnk×1 + fg×1 + tp×1 + spd×0.5 + hgt×0.5 + drb×0.5 + oiq×0.5
+// ...then raised to ^1.9
+```
+
+Why 1.9? Because linear weighting would give role players too many shots. The exponent creates a *huge* gap between a 0.9-usage star and a 0.6-usage role player — the star gets the ball dramatically more. This is why the AI feels realistic: true star players dominate the ball, not just a little more but *a lot* more.
+
 ### Step 5: The shot
 
 ---
@@ -255,7 +275,13 @@ if (this.probBlk() > Math.random()) {
     blocked = true;
 }
 ```
-Block formula: `(hgt × 2.5 + jmp × 1.5 + diq × 0.5)` — the blocker's rating vs. the shooter's.
+
+The actual block probability formula:
+```typescript
+probBlk() = blockFactor × 0.2 × team[d].compositeRating.blocking²
+```
+
+Note the **square** — `blocking²`. A team with 0.9 blocking composite blocks at `0.2 × 0.81 = 16%` base rate. A team at 0.5 blocks at `0.2 × 0.25 = 5%`. This exponential scaling means rim protection is only truly impactful at high rating levels — an average shot-blocker barely matters, but an elite one dominates.
 
 ### Final outcome
 The game rolls a random number and checks:
@@ -395,7 +421,78 @@ shouldIntentionalFoul() {
 
 ---
 
-## Part 13: What This All Means for How You Play the Game
+## Part 13: The OVR Formula — What the Game Actually Values
+
+The Overall Rating displayed in the UI comes from `src/worker/core/player/ovr.basketball.ts`. It's a **fixed linear regression** over raw ratings (fit against historical NBA data):
+
+| Rank | Rating | Weight |
+|------|--------|--------|
+| 1 (tied) | `hgt` | 0.159 |
+| 1 (tied) | `diq` | 0.159 |
+| 3 | `oiq` | 0.133 |
+| 4 | `spd` | 0.123 |
+| 5 | `stre` | ~0.08 |
+| 6 | `pss` | ~0.07 |
+| 7 | `tp` | ~0.06 |
+| ... | others | lower |
+
+**What this reveals:**
+
+- **Height and Defensive IQ are the most important stats in the game** — equally weighted at #1. A 7-footer with elite `diq` starts with a massive OVR floor.
+- **Offensive IQ is #3** — more important than speed, which surprises people.
+- **Three-point shooting (`tp`) is only #7** — valuable, but the OVR formula underweights it compared to its impact in actual game simulation.
+- **`endu` (endurance) has almost no OVR weight** — but it dramatically affects in-game performance (see Part 8). This creates a hidden undervalued asset: high-endurance players perform better than their OVR suggests.
+
+This creates exploitable inefficiencies: the OVR formula doesn't perfectly capture game performance, which is why building around specific systems can outperform building around raw OVR.
+
+---
+
+## Part 14: How the AI Makes Decisions
+
+### Drafting
+
+From `src/worker/core/draft/runPicks.ts`:
+
+```typescript
+score(player, index) = (teamOvrDiff + 0.05 × player.value) ^ 40
+```
+
+Where `teamOvrDiff` = how much that player's addition increases the team's OVR.
+
+The **`^40` exponent** makes this extremely non-linear. A player who improves team OVR by 3 points scores `3.15^40`. A player who improves it by 2 points scores `2.1^40`. The ratio is enormous — the AI almost always drafts the player who helps OVR the most, with `0.05 × player.value` as just a tiny tiebreaker for raw upside. This means:
+
+- **Best Available is the near-universal AI strategy** — positional need is almost irrelevant
+- Stars always go #1 even if the team has no need at that position
+- Late picks vary more because many players have similar OVR impact near zero
+
+### Trading
+
+From `src/worker/core/trade/betweenAiTeams.ts` and `makeItWork.ts`:
+
+The AI runs trades daily. It randomly picks a player to offer, finds a partner, then adds assets until `team.valueChange()` goes positive for itself. A trade is **rejected** if:
+
+```typescript
+Math.abs(dv2) > 15  // Too lopsided
+```
+
+Only picks-only trades are also rejected. The AI won't give up more than 15 "value points" even if it wants the player — this caps how badly it can be exploited.
+
+### Free Agency
+
+From `src/worker/core/freeAgents/autoSign.ts`:
+
+Each day, AI teams individually decide whether to pursue free agents:
+
+```typescript
+// Contending teams: 75% skip probability per day
+// Rebuilding teams:  90% skip probability per day
+```
+
+**Plain English:** On any given day, most AI teams do nothing. Rebuilding teams are explicitly coded to be *even more passive* — they sign players 40% less often than contenders. This creates windows where good free agents sit unsigned while AI teams skip.
+
+---
+
+## Part 15: What This All Means for How You Play the Game
 
 Understanding the code reveals some non-obvious strategic truths:
 
@@ -418,6 +515,21 @@ The code explicitly scales down three-point ratings at the high end to prevent e
 
 ### Foul trouble is dynamically managed
 The AI uses a `foulTroubleLimit` that scales by quarter. A star in foul trouble in Q1 gets sat more conservatively than the same star in Q4.
+
+### Endurance is a hidden undervalued asset
+The OVR formula gives endurance almost no weight — but in-game it scales every player's shot probability and defensive output for the full 48 minutes. A high-endurance role player outperforms their OVR in long games, especially in the playoffs where fatigue accumulates across series.
+
+### Height + Defensive IQ = OVR foundation
+The OVR formula weights `hgt` and `diq` equally at #1. A tall player with high `diq` has a massive OVR floor even with mediocre offensive ratings. Don't overlook defensive IQ when scouting — it's the single biggest OVR driver besides height.
+
+### The AI draft is predictably exploitable
+The `^40` exponent means AI teams almost exclusively draft "best available by OVR impact." They don't maneuver for positional need. You can predict AI draft behavior almost perfectly by asking: who raises each team's OVR the most right now?
+
+### Free agency windows are real
+With rebuilding teams skipping 90% of free agency days and contenders 75%, quality players regularly sit unsigned for days. The market moves slowly — you have more time to sign players than you might think before the AI swoops in.
+
+### The trade lopsidedness cap is 15 value points
+AI teams reject trades where they lose >15 value points. This cap can be tested: trades just under that threshold go through even if they benefit you significantly.
 
 ---
 
