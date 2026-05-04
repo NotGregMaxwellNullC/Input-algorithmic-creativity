@@ -66,6 +66,48 @@ CONFIG = {
 
     # --- Horizon ---
     "hold_years":               30,
+
+    # --- Scenario probability weights ---
+    # These are NOT empirical probabilities. Nobody knows the true odds of
+    # any of these outcomes. They are explicit beliefs you can dial.
+    # Pick a profile or set "custom" and edit WEIGHT_PROFILES["custom"].
+    #
+    # Profiles available:
+    #   "default"    — slightly bullish-leaning, original weights (sum = 100%)
+    #   "skeptical"  — assumes Bitcoin's safe-haven thesis is unproven and
+    #                  stagnation is the most likely single outcome
+    #   "bullish"    — assumes halving cycles + adoption continue
+    #   "balanced"   — flat 20% across all five scenarios
+    #   "custom"     — your own weights below
+    "weight_profile":   "skeptical",
+}
+
+# ═══════════════════════════════════════════════════════════════
+#  WEIGHT PROFILES — dial your beliefs about scenario likelihood
+# ═══════════════════════════════════════════════════════════════
+#
+# Why this matters: the original "default" weights leaned optimistic
+# (50% combined for Base + Bull). The "skeptical" profile is more honest
+# given current evidence:
+#   • BTC has not yet acted as safe haven in any actual crisis
+#   • Correlation with NASDAQ is ~0.7, with gold is ~0.1
+#   • Stagnation analog (Gold 1980–2000) is historically realistic
+#   • Halving cycles continuing as before is an assumption, not a law
+#
+# Order: catastrophic, stagnation, tight_money, base, bull
+# Must sum to 1.0 (will be normalized if not).
+
+WEIGHT_PROFILES = {
+    "default":   {"catastrophic": 0.10, "stagnation": 0.20, "tight_money": 0.20,
+                  "base":         0.30, "bull":       0.20},
+    "skeptical": {"catastrophic": 0.15, "stagnation": 0.35, "tight_money": 0.25,
+                  "base":         0.20, "bull":       0.05},
+    "bullish":   {"catastrophic": 0.05, "stagnation": 0.10, "tight_money": 0.15,
+                  "base":         0.40, "bull":       0.30},
+    "balanced":  {"catastrophic": 0.20, "stagnation": 0.20, "tight_money": 0.20,
+                  "base":         0.20, "bull":       0.20},
+    "custom":    {"catastrophic": 0.15, "stagnation": 0.30, "tight_money": 0.25,
+                  "base":         0.20, "bull":       0.10},  # ← edit me
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -99,7 +141,6 @@ SCENARIOS = {
         "color":   "#C0392B",
         "lw":      2.5,
         "ls":      "-",
-        "weight":  0.10,
         "anchors": [
             (2026, 55_000), (2027, 28_000), (2028, 11_000),
             (2030,  3_000), (2033,    400), (2040,     50),
@@ -118,7 +159,6 @@ SCENARIOS = {
         "color":   "#E67E22",
         "lw":      2.5,
         "ls":      "-",
-        "weight":  0.20,
         "anchors": [
             (2026, 70_000), (2027, 46_000), (2028, 55_000),
             (2029, 40_000), (2030, 57_000), (2032, 66_000),
@@ -139,7 +179,6 @@ SCENARIOS = {
         "color":   "#D4AC0D",
         "lw":      2.5,
         "ls":      "-",
-        "weight":  0.20,
         "anchors": [
             (2026, 51_000), (2027, 31_000), (2028, 25_000),
             (2029, 75_000), (2030, 150_000),(2031, 88_000),
@@ -161,7 +200,6 @@ SCENARIOS = {
         "color":   "#2ECC71",
         "lw":      3.0,
         "ls":      "-",
-        "weight":  0.30,
         "anchors": [
             (2026, 138_000),(2027, 90_000), (2028, 64_000),
             (2029, 255_000),(2030, 330_000),(2031, 195_000),
@@ -183,7 +221,6 @@ SCENARIOS = {
         "color":   "#3498DB",
         "lw":      2.5,
         "ls":      "-",
-        "weight":  0.20,
         "anchors": [
             (2026, 270_000),(2027, 165_000),(2028, 118_000),
             (2029, 710_000),(2030, 930_000),(2031, 540_000),
@@ -203,6 +240,27 @@ SCENARIOS = {
 # ═══════════════════════════════════════════════════════════════
 #  CORE MATH
 # ═══════════════════════════════════════════════════════════════
+
+def apply_weights(profile_name: str = None) -> str:
+    """
+    Inject scenario weights from the active profile into SCENARIOS.
+    Normalizes if weights don't sum to 1.0. Returns the profile name used.
+    """
+    profile_name = profile_name or CONFIG.get("weight_profile", "default")
+    if profile_name not in WEIGHT_PROFILES:
+        raise ValueError(
+            f"Unknown weight_profile '{profile_name}'. "
+            f"Available: {list(WEIGHT_PROFILES.keys())}"
+        )
+    weights = WEIGHT_PROFILES[profile_name].copy()
+    total = sum(weights.values())
+    if abs(total - 1.0) > 1e-6:
+        weights = {k: v / total for k, v in weights.items()}
+    for key, w in weights.items():
+        if key in SCENARIOS:
+            SCENARIOS[key]["weight"] = w
+    return profile_name
+
 
 def interpolate_log_linear(anchors: list, years: list) -> dict:
     """Log-linear interpolation between (year, price) anchor points."""
@@ -525,9 +583,14 @@ def print_report(years, paths):
     spd  = CONFIG["sell_pct_per_double"]
     ep   = CONFIG["entry_price_for_exit"]
 
+    profile = CONFIG.get("weight_profile", "default")
+    weights = {k: SCENARIOS[k].get("weight", 0) for k in SCENARIOS}
+
     div = "═" * 68
     print(f"\n{div}")
     print("  BITCOIN STRATEGY REPORT")
+    print(f"  Profile: '{profile}'   |   Weights: " +
+          "  ".join(f"{k}={w*100:.0f}%" for k, w in weights.items()))
     print("  ⚠️  NOT FINANCIAL ADVICE — Educational modeling tool only")
     print(div)
 
@@ -580,8 +643,8 @@ def print_report(years, paths):
         "S2F missed its own 2021–2022 targets by 70%. Excluded as primary model here.",
         "Power Law is a wide corridor ($48k–$490k currently) — it's a location map, not a target.",
         "Expect −50% to −80% drawdowns. That is normal. Selling in them is the real risk.",
-        "The stagnation scenario (20%) is historically realistic — Gold did this for 28 years.",
-        "The catastrophic scenario (10%) is real. Don't allocate money you can't afford to lose.",
+        f"Stagnation scenario ({weights['stagnation']*100:.0f}%) — Gold did this 1980–2008 (28 years).",
+        f"Catastrophic scenario ({weights['catastrophic']*100:.0f}%) is real. Size accordingly.",
         "Hawkish Fed / strong dollar = BTC headwinds. Watch DXY and Fed policy first.",
     ]
     for r in reminders:
@@ -593,11 +656,16 @@ def print_report(years, paths):
 # ═══════════════════════════════════════════════════════════════
 
 def main():
+    profile = apply_weights()
+    print(f"📌  Active weight profile: '{profile}'")
+    print(f"    Edit CONFIG['weight_profile'] to change. Options: "
+          f"{', '.join(WEIGHT_PROFILES.keys())}")
+
     years, paths = generate_paths(2026, 2055)
 
     fig = plt.figure(figsize=(20, 20), facecolor=BG)
     fig.suptitle(
-        "Bitcoin Price Model & Exit Strategy    ⚠️  NOT FINANCIAL ADVICE",
+        f"Bitcoin Price Model & Exit Strategy   ·   profile: {profile}   ·   ⚠️ NOT FINANCIAL ADVICE",
         color=TEXT, fontsize=13, fontweight="bold", y=0.985
     )
 
